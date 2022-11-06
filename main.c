@@ -101,7 +101,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
+	  /*HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
 	  HAL_Delay(5000);
 
 	  //new code sigh
@@ -110,9 +110,17 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  uint8_t Test[] = "Hello world !!!\r\n";
-	  HAL_UART_Transmit(&huart2, Test, sizeof(Test),10);
-	  HAL_Delay(1000);
+	 // uint8_t Test[] = "Hello world !!!\r\n";
+	 // HAL_UART_Transmit(&huart2, Test, sizeof(Test),10);
+	 // HAL_Delay(1000);
+
+	  //toggle LED light with blue button
+	  if(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13)== GPIO_PIN_RESET){
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //turn on
+	  }else{
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //turn off
+	  }
+
   }
   /* USER CODE END 3 */
 }
@@ -248,14 +256,8 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PC0 RX_Pin TX_Pin */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|RX_Pin|TX_Pin;
+  /*Configure GPIO pins : PC13 PC0 RX_Pin TX_Pin */
+  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_0|RX_Pin|TX_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
