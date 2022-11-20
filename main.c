@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "liquidcrystal_i2c.h"
+#include "sds011.h"
 #include <string.h>
 #include <stdio.h>
 /* USER CODE END Includes */
@@ -63,9 +64,7 @@ static void MX_ADC1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-int test(int x){
-	return x;
-}
+
 /* USER CODE END 0 */
 
 /**
@@ -76,8 +75,10 @@ int main(void)
 {
   /* USER CODE BEGIN 1 */
 	uint16_t analog_value;
-	uint16_t rx_value;
-	uint8_t Rx_data[1]; //buffer - # of bytes
+
+	SDS sds;
+	uint16_t pm25_size = 0;
+	uint16_t pm10_size = 0;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -102,12 +103,16 @@ int main(void)
   MX_I2C1_Init();
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
-  HD44780_Init(2);
 
-  //connected to LCD Screen
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+  //SDS011
+  HD44780_Init(2); //initalize LCD Display
+  sdsInit(&sds, &huart2); //initialize SDS011 sensor
 
-  HAL_ADC_Start_IT(&hadc1);
+  //MQ-7
+  HAL_ADC_Start_IT(&hadc1);//start getting analog values
+
+  //switch between pm2.5 and pm10
+  int switch_pm = 0;
 
   char snum[5];
   /* USER CODE END 2 */
@@ -119,35 +124,50 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  //toggle LED light with blue button
-	  	  //if(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13)== GPIO_PIN_RESET){
-	  		  //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //turn on
-	  	  //}else{
-	  	//	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //turn off
-	  	 // }
+	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 
-	 // HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-
-	  //recieve 1 byte from interrupt  mode - SDS011 sensor
-	  HAL_UART_Receive_IT(&huart2,Rx_data, 1); //address, receive, size of input
-
-	  //MQ-7 sensor
-	  itoa(HAL_ADC_GetValue(&hadc1), snum, 10);
+	  //MQ-7 sensor instanteous reading every 500 miliseconds
+	  // Get ADC value
+	  analog_value = HAL_ADC_GetValue(&hadc1);
+	  itoa(analog_value, snum, 10); //turn analog numeric value into its corresponding character
 	  HD44780_Clear();
 	  HD44780_SetCursor(0,0);
 	  HD44780_PrintStr("CO: ");
 	  HD44780_PrintStr(snum);
 	  HD44780_PrintStr(" ppm");
-	  HAL_Delay(500);
 
-	  //MQ-7 sensor // Get ADC value
-	  analog_value = HAL_ADC_GetValue(&hadc1);
+	  //SDS-011 sensor instanteous reading every 500 miliseconds
+
+	  //get SDS-011 sensor information
+	  pm25_size = sdsGetPm2_5(&sds);
+	  pm10_size = sdsGetPm10(&sds);
+
+	  //display information
+	  if(switch_pm == 0){
+		  itoa(pm10_size, snum, 10); //convert numeric values into characters
+		  HD44780_SetCursor(0,1);
+		  HD44780_PrintStr("PM10: ");
+		  HD44780_PrintStr(snum);
+		  HD44780_PrintStr(" ppm");
+
+		  switch_pm = 1;
+	  }else{
+		  itoa(pm25_size, snum, 10); //convert numeric values into characters
+		  HD44780_SetCursor(0,1);
+		  HD44780_PrintStr("PM2.5: ");
+		  HD44780_PrintStr(snum);
+		  HD44780_PrintStr(" ppm");
+
+		  switch_pm = 0;
+	  }
+
+
+	  HAL_Delay(1500);
+
+
 	  /* USER CODE END 2 */
   }
 
-  void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
-  		_NOP();
-  	}
   /* USER CODE END 3 */
 }
 
@@ -339,6 +359,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LD2_Pin */
   GPIO_InitStruct.Pin = LD2_Pin;
