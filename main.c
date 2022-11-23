@@ -22,7 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "liquidcrystal_i2c.h"
-#include "sds011.h"
+#include  "stdbool.h"
 #include <string.h>
 #include <stdio.h>
 /* USER CODE END Includes */
@@ -46,6 +46,7 @@ ADC_HandleTypeDef hadc1;
 
 I2C_HandleTypeDef hi2c1;
 
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
@@ -55,9 +56,10 @@ UART_HandleTypeDef huart2;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -74,11 +76,6 @@ static void MX_ADC1_Init(void);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-	uint16_t analog_value;
-
-	SDS sds;
-	uint16_t pm25_size = 0;
-	uint16_t pm10_size = 0;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -99,22 +96,68 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART2_UART_Init();
   MX_I2C1_Init();
   MX_ADC1_Init();
+  MX_USART1_UART_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  HD44780_Init(2); //initialize LCD Display
 
-  //SDS011
-  HD44780_Init(2); //initalize LCD Display
-  sdsInit(&sds, &huart2); //initialize SDS011 sensor
+  uint32_t mq_analog; ////MQ-7 sensor
+  uint32_t mq_sum = 0; //MQ-7 sensor sum
 
-  //MQ-7
-  HAL_ADC_Start_IT(&hadc1);//start getting analog values
+  uint16_t sds_rx; //SDS-011 sensor
+  uint16_t sds_sum = 0; //SDS-011 sensor sum
+  uint8_t data[50]; //buffer for SDS-011 sensor
 
-  //switch between pm2.5 and pm10
-  int switch_pm = 0;
+  //average modes
+  bool mode = false; //alternate between concentration and over and under
+  bool avg_on = false; //should show avg or not
+  int count = 0; //countdown from
+  const int STOP = 60; //number of intervals for average
 
+  const int CO_MAX = 20; //in ppm
+  const int PM_MAX = 12;
+  //characters
   char snum[5];
+
+  	/**
+     * Converts carbon monoxide concentration into mili-grams per cubic meter of air
+     *
+     *@param con_ppm concentration in ppm (parts per million)
+     *@return concentration converted into micro-grams per cubic meter of air
+    */
+    int carbon_conversion(int con_ppm){
+        const double CARBON_MOL = 28.01;
+        return ((CARBON_MOL * con_ppm * 1000) / 24.45)/1000;
+    }
+
+    /**
+      * Checks if carbon monoxide is above or below EPA guideline valyes
+      *
+      *@param carbon monoxide concentration in ppm (parts per million)
+      *@return whether it the CO concentration is over or under EPA guideline values
+     */
+     bool is_CO(int ppm_CO){
+        if(ppm_CO < CO_MAX){
+        	return true;
+        }
+        return false;
+     }
+
+     /**
+      * Checks if particulate matter is above or below EPA guideline valyes
+       *
+       *@param particulate matter concentration in um/g^3
+       *@return whether it the PM2.5 concentration is over or under EPA guideline values
+     */
+        bool is_PM25(int PM2_5){
+          if(PM2_5  < PM_MAX){
+            return true;
+          }
+            return false;
+        }
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -124,50 +167,130 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 
-	  //MQ-7 sensor instanteous reading every 500 miliseconds
-	  // Get ADC value
-	  analog_value = HAL_ADC_GetValue(&hadc1);
-	  itoa(analog_value, snum, 10); //turn analog numeric value into its corresponding character
+	  //Getting input
+	  mq_analog = carbon_conversion(HAL_ADC_GetValue(&hadc1)); //read analog data from MQ-7 sensor and convert measurements
+	  HAL_UART_Receive_IT(&huart2, data, 9); //read SDS011 sensor into an array/buffer
+	  sds_rx = (data[3]|data[2])/10; //calculate the amount of pm2.5 with formula: (high byte + low byte)/10
+
+	  //when the blue button is pushed
+	  if(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13)== GPIO_PIN_RESET){
+	  	 HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); //turn light on
+
+	  	 if(avg_on){ //on -> off average mode
+	  		 avg_on = false;
+	  		 count = 0;
+	  		 mq_sum = 0;
+	  		 sds_sum = 0;
+	  	 }else{ //off -> on
+	  		 avg_on = true;
+	  	 }
+	  }else{
+	  	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); //turn light off
+	  }
+
 	  HD44780_Clear();
+
+	  //Carbon monoxide display
+	  if(avg_on){
+	  	 if(count == STOP){ //show avg carbon monoxide
+	  	   itoa(mq_sum/STOP, snum, 10);
+	  	 }else{
+	  		itoa(mq_analog, snum, 10);
+	  	 }
+	  }else{ //show instanteous CO concentration
+		  itoa(mq_analog, snum, 10); //turn analog numeric value into its corresponding character
+	  }
+
 	  HD44780_SetCursor(0,0);
 	  HD44780_PrintStr("CO: ");
 	  HD44780_PrintStr(snum);
-	  HD44780_PrintStr(" ppm");
+	  HD44780_PrintStr(" mg/m3");
 
-	  //SDS-011 sensor instanteous reading every 500 miliseconds
+	  if(!mode){
+	    HD44780_Clear();
+	    HD44780_PrintStr("CO: ");
 
-	  //get SDS-011 sensor information
-	  pm25_size = sdsGetPm2_5(&sds);
-	  pm10_size = sdsGetPm10(&sds);
-
-	  //display information
-	  if(switch_pm == 0){
-		  itoa(pm10_size, snum, 10); //convert numeric values into characters
-		  HD44780_SetCursor(0,1);
-		  HD44780_PrintStr("PM10: ");
-		  HD44780_PrintStr(snum);
-		  HD44780_PrintStr(" ppm");
-
-		  switch_pm = 1;
-	  }else{
-		  itoa(pm25_size, snum, 10); //convert numeric values into characters
-		  HD44780_SetCursor(0,1);
-		  HD44780_PrintStr("PM2.5: ");
-		  HD44780_PrintStr(snum);
-		  HD44780_PrintStr(" ppm");
-
-		  switch_pm = 0;
+	    if(avg_on && count == STOP){
+	    	if(is_CO(HAL_ADC_GetValue(&hadc1))){ //CO avg safe values
+	    	 itoa(carbon_conversion(CO_MAX - mq_sum/STOP), snum, 10);
+	    	 HD44780_PrintStr(snum);
+	    	 HD44780_PrintStr(" BELOW");
+	      }else{
+	    	 itoa(carbon_conversion(mq_sum/STOP - CO_MAX), snum, 10);
+	    	 HD44780_PrintStr(snum);
+	    	 HD44780_PrintStr(" ABOVE");
+	      }
+	    }else if(is_CO(HAL_ADC_GetValue(&hadc1))){ //CO instanteous safe values
+	    	itoa(carbon_conversion(CO_MAX - HAL_ADC_GetValue(&hadc1)), snum, 10);
+	  	   HD44780_PrintStr(snum);
+	  	   HD44780_PrintStr(" BELOW");
+	    }else{
+	  	   itoa(carbon_conversion(HAL_ADC_GetValue(&hadc1) - CO_MAX), snum, 10);
+	  	   HD44780_PrintStr(snum);
+	  	   HD44780_PrintStr(" ABOVE");
+	  	}
 	  }
 
+	  if(avg_on){
+		if(count != STOP){ //show countdown
+		  count++;
+		  itoa(count, snum, 10);
+		  HD44780_SetCursor(14,0);
+		  HD44780_PrintStr(snum);
 
-	  HAL_Delay(1500);
+		  mq_sum = mq_sum + mq_analog; //sum of CO
+		  sds_sum = sds_sum + sds_rx; //sum of PM2.5
+	  	}else{
+	      HD44780_SetCursor(12,0); //signal to user that they're in avg mode
+	  	  HD44780_PrintStr(" AVG");
+	  	}
+	 }
 
+	  //Particulate matter display
+	  if(avg_on){ //show avg PM2.5 concentration
+	  	if(count == STOP){
+	  		itoa(sds_sum/STOP, snum, 10);
+	  	 }else{
+	  		itoa(sds_rx, snum, 10);
+	  	 }
+	  }else{
+		itoa(sds_rx, snum, 10);
+	  }
 
-	  /* USER CODE END 2 */
+	  HD44780_SetCursor(0,1);
+	  if(mode){//displaying instanteous PM2.5
+	  	  mode = false;
+	  	  HD44780_PrintStr("PM2.5: ");
+	  	  HD44780_PrintStr(snum);
+	  	  HD44780_PrintStr(" ug/m3");
+	  }else{
+	  	HD44780_PrintStr("PM2.5: ");
+	  	mode = true;
+	  	if(avg_on && count == STOP){
+	  		if(is_PM25(sds_sum)){ //PM25 instanteous avg safe values
+	  		  itoa((sds_sum/STOP) - PM_MAX, snum, 10);
+	  		  HD44780_PrintStr(snum);
+	  	      HD44780_PrintStr(" ABOVE");
+	        }else{
+	  		  itoa(PM_MAX - (sds_sum/STOP), snum, 10);
+	  		  HD44780_PrintStr(snum);
+	  		  HD44780_PrintStr(" BELOW  ");
+	  	    }
+	  	}
+	  	if(is_PM25(sds_rx)){ //PM25 instanteous safe values
+	  	  itoa(PM_MAX - sds_rx, snum, 10);
+	  	  HD44780_PrintStr(snum);
+	  	  HD44780_PrintStr(" BELOW  ");
+	  	}else{
+	  	  itoa(sds_rx - PM_MAX, snum, 10);
+	  	  HD44780_PrintStr(snum);
+	  	  HD44780_PrintStr(" ABOVE");
+	  	}
+	  }
+
+	  HAL_Delay(1000); //1 second
   }
-
   /* USER CODE END 3 */
 }
 
@@ -300,6 +423,39 @@ static void MX_I2C1_Init(void)
   /* USER CODE BEGIN I2C1_Init 2 */
 
   /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
 
 }
 
